@@ -15,20 +15,21 @@ const app = express();
 const server = createServer(app);
 const wss = new WebSocketServer({ server });
 
-app.use(cors({ origin: 'http://localhost:5173' }));
+app.use(cors({
+  origin: [
+    'http://localhost:5173',
+    /\.vercel\.app$/,
+    process.env.FRONTEND_URL,
+  ].filter(Boolean),
+  credentials: true,
+}));
 app.use(express.json());
 
-// Routes
 app.use('/api/bot', botRouter);
 app.use('/api/traders', traderRouter);
 app.use('/api/portfolio', portfolioRouter);
+app.get('/api/health', (req, res) => res.json({ status: 'ok', timestamp: Date.now() }));
 
-// Health check
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: Date.now() });
-});
-
-// WebSocket: broadcast live feed to all clients
 const clients = new Set();
 wss.on('connection', (ws) => {
   clients.add(ws);
@@ -42,7 +43,6 @@ export function broadcast(type, data) {
   }
 }
 
-// Start bot engine
 const binance = new BinanceService(
   process.env.BINANCE_API_KEY || '',
   process.env.BINANCE_API_SECRET || ''
@@ -52,7 +52,7 @@ botEngine.start();
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
-  console.log(`\n🚀 CopyTrader backend running on http://localhost:${PORT}`);
-  console.log(`📡 WebSocket ready on ws://localhost:${PORT}`);
-  console.log(`📊 Binance API: ${process.env.BINANCE_API_KEY ? '✅ configured' : '⚠️  demo mode (no key)'}\n`);
+  console.log(`\n🚀 CopyTrader backend on http://localhost:${PORT}`);
+  console.log(`📡 WebSocket ready`);
+  console.log(`📊 Binance: ${process.env.BINANCE_API_KEY ? '✅ live' : '⚠️  demo mode'}\n`);
 });

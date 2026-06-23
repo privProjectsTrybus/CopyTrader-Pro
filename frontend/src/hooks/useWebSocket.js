@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 
-export function useWebSocket(url) {
+const WS_URL = import.meta.env.VITE_WS_URL || 
+  (import.meta.env.PROD 
+    ? `wss://${window.location.host}/_/backend`
+    : 'ws://localhost:3001');
+
+export function useWebSocket(url = WS_URL) {
   const ws = useRef(null);
   const [connected, setConnected] = useState(false);
   const [feed, setFeed] = useState([]);
@@ -9,30 +14,21 @@ export function useWebSocket(url) {
 
   const connect = useCallback(() => {
     ws.current = new WebSocket(url);
-
     ws.current.onopen = () => setConnected(true);
     ws.current.onclose = () => {
       setConnected(false);
-      // Reconnect after 3s
       setTimeout(connect, 3000);
     };
     ws.current.onerror = () => ws.current.close();
-
     ws.current.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data);
         setLastEvent(msg);
-
-        // Add to feed for trade events
         const tradeTypes = ['trade_opened', 'trade_closed', 'stop_loss_triggered', 'trade_error'];
         if (tradeTypes.includes(msg.type)) {
           setFeed(prev => [{ ...msg, id: msg.ts }, ...prev].slice(0, 100));
         }
-
-        // Call registered listeners
-        if (listeners.current[msg.type]) {
-          listeners.current[msg.type](msg.data);
-        }
+        if (listeners.current[msg.type]) listeners.current[msg.type](msg.data);
       } catch {}
     };
   }, [url]);
