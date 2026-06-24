@@ -6,24 +6,55 @@ jobs:
   set-env:
     runs-on: ubuntu-latest
     steps:
-      - name: Set Vercel env vars
+      - name: Create Vercel project linked to this repo and set env vars
         run: |
+          TEAM="team_kKMaPe8zYlsP5xIB5iO86pKP"
+          TOKEN="${{ secrets.VERCEL_TOKEN }}"
+
+          # Create new project linked to GitHub repo
+          echo "Creating Vercel project..."
+          CREATE=$(curl -s -X POST "https://api.vercel.com/v10/projects?teamId=$TEAM" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "name": "copytrader-pro",
+              "framework": null,
+              "gitRepository": {
+                "type": "github",
+                "repo": "privProjectsTrybus/CopyTrader-Pro"
+              },
+              "buildCommand": "cd frontend && npm install && npm run build",
+              "outputDirectory": "frontend/dist",
+              "rootDirectory": null
+            }')
+          echo "Create result: $CREATE"
+          PROJECT_ID=$(echo "$CREATE" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const r=JSON.parse(d);console.log(r.id||r.error)})")
+          echo "Project ID: $PROJECT_ID"
+
+          # If project already exists, get its ID
+          if [[ "$PROJECT_ID" == *"error"* ]] || [[ -z "$PROJECT_ID" ]]; then
+            PROJECT_ID=$(curl -s "https://api.vercel.com/v9/projects/copytrader-pro?teamId=$TEAM" \
+              -H "Authorization: Bearer $TOKEN" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>console.log(JSON.parse(d).id))")
+            echo "Existing project ID: $PROJECT_ID"
+          fi
+
           set_env() {
-            curl -s -X POST "https://api.vercel.com/v10/projects/copytrader-pro/env?teamId=team_kKMaPe8zYlsP5xIB5iO86pKP&upsert=true" \
-              -H "Authorization: Bearer ${{ secrets.VERCEL_TOKEN }}" \
+            curl -s -X POST "https://api.vercel.com/v10/projects/$PROJECT_ID/env?teamId=$TEAM&upsert=true" \
+              -H "Authorization: Bearer $TOKEN" \
               -H "Content-Type: application/json" \
               -d "{\"key\":\"$1\",\"value\":\"$2\",\"type\":\"encrypted\",\"target\":[\"production\",\"preview\"]}"
-            echo " ✅ $1"
+            echo "✅ Set $1"
           }
+
           set_env "BINANCE_API_KEY"    "${{ secrets.BINANCE_API_KEY }}"
           set_env "BINANCE_API_SECRET" "${{ secrets.BINANCE_API_SECRET }}"
           set_env "BYBIT_API_KEY"      "${{ secrets.BYBIT_API_KEY }}"
           set_env "BYBIT_API_SECRET"   "${{ secrets.BYBIT_API_SECRET }}"
 
-      - name: Trigger Vercel redeploy
-        run: |
-          curl -s -X POST "https://api.vercel.com/v13/deployments?teamId=team_kKMaPe8zYlsP5xIB5iO86pKP" \
-            -H "Authorization: Bearer ${{ secrets.VERCEL_TOKEN }}" \
+          # Trigger deployment
+          echo "Triggering deploy..."
+          curl -s -X POST "https://api.vercel.com/v13/deployments?teamId=$TEAM" \
+            -H "Authorization: Bearer $TOKEN" \
             -H "Content-Type: application/json" \
-            -d '{"name":"copytrader-pro","gitSource":{"type":"github","repoId":"1278487017","ref":"main"}}'
-          echo "✅ Redeploy triggered"
+            -d "{\"name\":\"copytrader-pro\",\"target\":\"production\",\"gitSource\":{\"type\":\"github\",\"repoId\":\"1278487017\",\"ref\":\"main\"}}"
+          echo "✅ Deploy triggered"
