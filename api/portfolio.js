@@ -1,4 +1,3 @@
-// Portfolio: real balances from Binance/Bybit using API keys set in Vercel env vars
 import crypto from 'crypto';
 
 function binanceSign(secret, params) {
@@ -8,38 +7,82 @@ function binanceSign(secret, params) {
 }
 
 async function getBinanceAccount(apiKey, secret) {
-  const params = { timestamp: Date.now(), recvWindow: 5000 };
+  // Try both global and US endpoints — Binance blocks some Vercel regions
+  const endpoints = [
+    'https://api1.binance.com',
+    'https://api2.binance.com', 
+    'https://api3.binance.com',
+    'https://api.binance.com',
+  ];
+  const params = { timestamp: Date.now(), recvWindow: 10000 };
   const qs = binanceSign(secret, params);
-  const r = await fetch(`https://api.binance.com/api/v3/account?${qs}`, {
-    headers: { 'X-MBX-APIKEY': apiKey },
-    signal: AbortSignal.timeout(8000),
-  });
-  if (!r.ok) throw new Error(`Binance error: ${r.status}`);
-  return r.json();
+  
+  for (const base of endpoints) {
+    try {
+      const r = await fetch(`${base}/api/v3/account?${qs}`, {
+        headers: { 'X-MBX-APIKEY': apiKey },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (r.ok) return r.json();
+      const err = await r.json();
+      // 451 = geo-blocked, try next endpoint
+      if (r.status === 451) continue;
+      throw new Error(err.msg || `HTTP ${r.status}`);
+    } catch (e) {
+      if (e.message?.includes('451') || e.name === 'TimeoutError') continue;
+      throw e;
+    }
+  }
+  throw new Error('All Binance endpoints geo-blocked from this server region. Use Binance API key with IP restriction disabled, or enable server-side proxy.');
 }
 
 async function getBinancePrices() {
-  const r = await fetch('https://api.binance.com/api/v3/ticker/price', { signal: AbortSignal.timeout(5000) });
-  const data = await r.json();
-  return Object.fromEntries(data.map(p => [p.symbol, parseFloat(p.price)]));
+  const endpoints = ['https://api1.binance.com','https://api2.binance.com','https://api.binance.com'];
+  for (const base of endpoints) {
+    try {
+      const r = await fetch(`${base}/api/v3/ticker/price`, { signal: AbortSignal.timeout(5000) });
+      if (r.ok) {
+        const data = await r.json();
+        return Object.fromEntries(data.map(p => [p.symbol, parseFloat(p.price)]));
+      }
+    } catch {}
+  }
+  return {};
 }
 
 async function getBybitAccount(apiKey, secret) {
   const timestamp = Date.now().toString();
-  const params = `accountType=UNIFIED`;
-  const toSign = timestamp + apiKey + '5000' + params;
-  const sig = crypto.createHmac('sha256', secret).update(toSign).digest('hex');
-  const r = await fetch(`https://api.bybit.com/v5/account/wallet-balance?${params}`, {
-    headers: {
-      'X-BAPI-API-KEY': apiKey,
-      'X-BAPI-SIGN': sig,
-      'X-BAPI-TIMESTAMP': timestamp,
-      'X-BAPI-RECV-WINDOW': '5000',
-    },
-    signal: AbortSignal.timeout(8000),
-  });
-  if (!r.ok) throw new Error(`Bybit error: ${r.status}`);
-  return r.json();
+  const recvWindow = '20000';
+  // Bybit V5 wallet balance — use UNIFIED account type first, fall back to CONTRACT
+  for (const accountType of ['UNIFIED', 'CONTRACT', 'SPOT']) {
+    try {
+      const params = `accountType=${accountType}`;
+      const toSign = timestamp + apiKey + recvWindow + params;
+      const sig = crypto.createHmac('sha256', secret).update(toSign).digest('hex');
+      const r = await fetch(`https://api.bybit.com/v5/account/wallet-balance?${params}`, {
+        headers: {
+          'X-BAPI-API-KEY': apiKey,
+          'X-BAPI-SIGN': sig,
+          'X-BAPI-TIMESTAMP': timestamp,
+          'X-BAPI-RECV-WINDOW': recvWindow,
+          'X-BAPI-SIGN-TYPE': '2',
+        },
+        signal: AbortSignal.timeout(8000),
+      });
+      const data = await r.json();
+      if (data.retCode === 0) {
+        const coins = data?.result?.list?.[0]?.coin || [];
+        if (coins.length > 0) return { coins, accountType };
+      }
+      // retCode 10005 = wrong account type, try next
+      if (data.retCode === 10005 || data.retCode === 10003) continue;
+      throw new Error(data.retMsg || `Bybit error ${data.retCode}`);
+    } catch (e) {
+      if (e.message?.includes('10005') || e.message?.includes('10003')) continue;
+      throw e;
+    }
+  }
+  throw new Error('Could not fetch Bybit balance — check API key has Read permission enabled');
 }
 
 const PNL_DATA = [
@@ -62,49 +105,55 @@ export default async function handler(req, res) {
   let prices = {};
   let demo = true;
 
-  // Fetch live prices regardless
+  // Always fetch live prices (public API, no key needed)
   try { prices = await getBinancePrices(); } catch {}
 
   // Binance balances
   if (BINANCE_KEY && BINANCE_SECRET) {
     try {
       const account = await getBinanceAccount(BINANCE_KEY, BINANCE_SECRET);
-      const binanceBals = (account.balances || [])
+      const bals = (account.balances || [])
         .filter(b => parseFloat(b.free) + parseFloat(b.locked) > 0.000001)
         .map(b => {
           const total = parseFloat(b.free) + parseFloat(b.locked);
           const price = b.asset === 'USDT' ? 1 : (prices[`${b.asset}USDT`] || 0);
           return { asset: b.asset, free: parseFloat(b.free), locked: parseFloat(b.locked), total, usdValue: total * price, price, exchange: 'binance' };
         });
-      balances = [...balances, ...binanceBals];
+      balances = [...balances, ...bals];
       demo = false;
-    } catch (e) { errors.push(`Binance: ${e.message}`); }
+    } catch (e) {
+      errors.push(`Binance: ${e.message}`);
+    }
   }
 
   // Bybit balances
   if (BYBIT_KEY && BYBIT_SECRET) {
     try {
-      const data = await getBybitAccount(BYBIT_KEY, BYBIT_SECRET);
-      const coins = data?.result?.list?.[0]?.coin || [];
-      const bybitBals = coins
+      const { coins, accountType } = await getBybitAccount(BYBIT_KEY, BYBIT_SECRET);
+      const bals = coins
         .filter(c => parseFloat(c.walletBalance) > 0.000001)
         .map(c => {
           const total = parseFloat(c.walletBalance);
           const price = c.coin === 'USDT' ? 1 : (prices[`${c.coin}USDT`] || 0);
-          return { asset: c.coin, free: parseFloat(c.availableToWithdraw || c.walletBalance), locked: parseFloat(c.locked || 0), total, usdValue: total * price, price, exchange: 'bybit' };
+          return { asset: c.coin, free: parseFloat(c.availableToWithdraw || c.walletBalance), locked: parseFloat(c.locked || 0), total, usdValue: total * price, price, exchange: `bybit-${accountType}` };
         });
-      balances = [...balances, ...bybitBals];
+      balances = [...balances, ...bals];
       demo = false;
-    } catch (e) { errors.push(`Bybit: ${e.message}`); }
+    } catch (e) {
+      errors.push(`Bybit: ${e.message}`);
+    }
   }
 
-  // Demo fallback
+  // Demo fallback only if both failed
   if (demo) {
+    const btc = prices['BTCUSDT'] || 61240;
+    const eth = prices['ETHUSDT'] || 3180;
+    const sol = prices['SOLUSDT'] || 142;
     balances = [
       { asset: 'USDT', free: 10000, locked: 0, total: 10000, usdValue: 10000, price: 1, exchange: 'demo' },
-      { asset: 'BTC',  free: 0.15,  locked: 0, total: 0.15,  usdValue: 0.15 * (prices['BTCUSDT']||61240), price: prices['BTCUSDT']||61240, exchange: 'demo' },
-      { asset: 'ETH',  free: 2.5,   locked: 0, total: 2.5,   usdValue: 2.5  * (prices['ETHUSDT']||3180),  price: prices['ETHUSDT']||3180,  exchange: 'demo' },
-      { asset: 'SOL',  free: 25,    locked: 0, total: 25,     usdValue: 25   * (prices['SOLUSDT']||142),   price: prices['SOLUSDT']||142,   exchange: 'demo' },
+      { asset: 'BTC',  free: 0.15,  locked: 0, total: 0.15,  usdValue: 0.15 * btc, price: btc, exchange: 'demo' },
+      { asset: 'ETH',  free: 2.5,   locked: 0, total: 2.5,   usdValue: 2.5  * eth, price: eth, exchange: 'demo' },
+      { asset: 'SOL',  free: 25,    locked: 0, total: 25,     usdValue: 25   * sol, price: sol, exchange: 'demo' },
     ];
   }
 
