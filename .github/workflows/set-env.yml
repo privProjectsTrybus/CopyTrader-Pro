@@ -1,0 +1,29 @@
+name: Set Vercel Environment Variables
+on:
+  workflow_dispatch:
+
+jobs:
+  set-env:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set Vercel env vars
+        run: |
+          set_env() {
+            curl -s -X POST "https://api.vercel.com/v10/projects/copytrader-pro/env?teamId=team_kKMaPe8zYlsP5xIB5iO86pKP&upsert=true" \
+              -H "Authorization: Bearer ${{ secrets.VERCEL_TOKEN }}" \
+              -H "Content-Type: application/json" \
+              -d "{\"key\":\"$1\",\"value\":\"$2\",\"type\":\"encrypted\",\"target\":[\"production\",\"preview\"]}"
+            echo " ✅ $1"
+          }
+          set_env "BINANCE_API_KEY"    "${{ secrets.BINANCE_API_KEY }}"
+          set_env "BINANCE_API_SECRET" "${{ secrets.BINANCE_API_SECRET }}"
+          set_env "BYBIT_API_KEY"      "${{ secrets.BYBIT_API_KEY }}"
+          set_env "BYBIT_API_SECRET"   "${{ secrets.BYBIT_API_SECRET }}"
+
+      - name: Trigger Vercel redeploy
+        run: |
+          curl -s -X POST "https://api.vercel.com/v13/deployments?teamId=team_kKMaPe8zYlsP5xIB5iO86pKP" \
+            -H "Authorization: Bearer ${{ secrets.VERCEL_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{"name":"copytrader-pro","gitSource":{"type":"github","repoId":"1278487017","ref":"main"}}'
+          echo "✅ Redeploy triggered"
