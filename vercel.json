@@ -2,8 +2,15 @@
   "buildCommand": "cd frontend && npm install && npm run build",
   "outputDirectory": "frontend/dist",
   "framework": null,
+  "functions": {
+    "api/edge/*.js": { "runtime": "edge" }
+  },
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/$1" },
-    { "source": "/(.*)", "destination": "/index.html" }
+    { "source": "/api/portfolio", "destination": "/api/edge/portfolio" },
+    { "source": "/api/prices",    "destination": "/api/edge/prices" },
+    { "source": "/api/traders",   "destination": "/api/edge/traders" },
+    { "source": "/api/bot",       "destination": "/api/edge/bot" },
+    { "source": "/api/events",    "destination": "/api/edge/bot?action=events" },
+    { "source": "/(.*)",          "destination": "/index.html" }
   ]
 }
