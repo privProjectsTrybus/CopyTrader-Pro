@@ -1,147 +1,202 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { api } from '../lib/api.js';
 
-export default function BotSettings({ botRunning, setBotRunning }) {
-  const [s, setS] = useState({ mode:'proportional', maxSize:500, sl:0.02, copyClose:true, drawdown:0.05, filter:'all' });
-  const [saved, setSaved] = useState(false);
-  const copying = ['CryptoWolf_X', 'TrendRider', 'AlphaStocks'];
+const PAIRS = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','ADAUSDT','DOGEUSDT'];
 
-  const save = () => { setSaved(true); setTimeout(()=>setSaved(false), 2000); };
-  const up = (k, v) => setS(p => ({...p, [k]:v}));
+export default function BotSettings() {
+  const [status, setStatus]   = useState(null);
+  const [settings, setSettings] = useState({ copyMode:'proportional', maxTradeUsd:100, autoStopLoss:2, copyCloses:true, assetFilter:'all' });
+  const [saved, setSaved]     = useState('');
+  const [loading, setLoad]    = useState(true);
+  const [manualTrade, setMT]  = useState({ symbol:'BTCUSDT', side:'long', price:62000 });
+  const [executing, setExec]  = useState(false);
+  const [tradeResult, setTR]  = useState(null);
+
+  const load = () => api.getBotStatus().then(s => { setStatus(s); setSettings(s.settings); setLoad(false); }).catch(() => setLoad(false));
+  useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, []);
+
+  const save = async () => {
+    await api.updateSettings(settings).catch(()=>{});
+    setSaved('✓ Saved'); setTimeout(()=>setSaved(''), 2000);
+  };
+
+  const stopCopying = async (id) => {
+    await api.stopCopying(id).catch(()=>{});
+    load();
+  };
+
+  const executeTrade = async () => {
+    setExec(true); setTR(null);
+    try {
+      const r = await api.executeTrade({
+        traderId: 'manual', traderName: 'Manual Trade',
+        symbol: manualTrade.symbol, side: manualTrade.side,
+        action: 'open', currentPrice: parseFloat(manualTrade.price),
+        exchange: 'binance',
+      });
+      setTR(r);
+    } catch (e) { setTR({ error: e.message }); }
+    finally { setExec(false); load(); }
+  };
+
+  if (loading) return <div style={{color:'var(--text-muted)',fontSize:13,padding:'2rem'}}>Loading bot status…</div>;
+
+  const traders = status?.copiedTraders || [];
+  const positions = status?.openPositions || [];
 
   return (
-    <div style={{ display:'flex', flexDirection:'column', gap:16, maxWidth:660 }}>
-      {/* Status card */}
-      <div style={card}>
-        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20 }}>
-          <div>
-            <div style={{ fontWeight:700, fontSize:15, marginBottom:4 }}>Bot engine</div>
-            <div style={{ fontSize:12, color:'var(--text3)' }}>Copying {copying.length} traders · executes trades automatically</div>
-          </div>
-          <button onClick={()=>setBotRunning?.(!botRunning)} style={{
-            padding:'8px 20px', borderRadius:20, border:'1.5px solid', cursor:'pointer', fontWeight:700, fontSize:13,
-            background:botRunning?'var(--red-bg)':'var(--green-bg)',
-            color:botRunning?'var(--red)':'var(--green)',
-            borderColor:botRunning?'var(--red-dim)':'var(--green-dim)',
-          }}>
-            {botRunning ? '⏸ Pause bot' : '▶ Start bot'}
-          </button>
+    <div className="fade-in" style={{display:'flex',flexDirection:'column',gap:'1.25rem',maxWidth:700}}>
+      {/* Connection status */}
+      <div style={{background:'var(--bg-card)',borderRadius:'var(--radius-lg)',padding:'1.25rem',border:'1px solid var(--border)'}}>
+        <div style={{fontWeight:600,fontSize:14,marginBottom:14}}>Exchange Connection</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+          {[
+            {name:'Binance',connected:status?.binanceConnected,key:'BINANCE_API_KEY'},
+            {name:'Bybit',  connected:status?.bybitConnected,  key:'BYBIT_API_KEY'},
+          ].map(ex=>(
+            <div key={ex.name} style={{background:'var(--bg-hover)',borderRadius:'var(--radius-md)',padding:'12px 14px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+              <div>
+                <div style={{fontWeight:600,fontSize:13}}>{ex.name}</div>
+                <div style={{fontSize:11,color:'var(--text-muted)',marginTop:2}}>Spot trading</div>
+              </div>
+              <div style={{display:'flex',alignItems:'center',gap:6,fontSize:12,fontWeight:600,color:ex.connected?'var(--green)':'var(--text-muted)'}}>
+                <span style={{width:7,height:7,borderRadius:'50%',background:ex.connected?'var(--green)':'var(--border-light)',display:'inline-block'}}/>
+                {ex.connected?'Connected':'No key'}
+              </div>
+            </div>
+          ))}
         </div>
+        {!status?.hasKeys && (
+          <div style={{marginTop:12,fontSize:12,color:'var(--gold)',background:'#1c1800',border:'1px solid #92400e',borderRadius:'var(--radius-sm)',padding:'10px 12px'}}>
+            ⚠️ Add your API keys in the <strong>API Keys</strong> tab to enable real trading
+          </div>
+        )}
+      </div>
 
-        <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:20, padding:'10px 14px', background:'var(--bg3)', borderRadius:'var(--radius)', border:'1px solid var(--border)' }}>
-          <div style={{ width:8, height:8, borderRadius:'50%', background:botRunning?'var(--green)':'var(--text3)', animation:botRunning?'pulse 2s infinite':'none', flexShrink:0 }}/>
-          <span style={{ fontSize:13, color:botRunning?'var(--green)':'var(--text3)', fontWeight:600 }}>{botRunning ? 'Running' : 'Paused'}</span>
-          <span style={{ fontSize:12, color:'var(--text3)', marginLeft:8 }}>
-            {botRunning ? `Monitoring ${copying.length} traders for new positions` : 'No new trades will be copied while paused'}
+      {/* Currently copying */}
+      <div style={{background:'var(--bg-card)',borderRadius:'var(--radius-lg)',padding:'1.25rem',border:'1px solid var(--border)'}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
+          <div style={{fontWeight:600,fontSize:14}}>Active Copies</div>
+          <span style={{fontSize:11,background:traders.length>0?'var(--green-bg)':'var(--bg-hover)',color:traders.length>0?'var(--green)':'var(--text-muted)',padding:'3px 10px',borderRadius:10,fontWeight:600}}>
+            {traders.length} copying
           </span>
         </div>
-
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10 }}>
-          {[{l:'Copying',v:copying.length},{l:'Open positions',v:3},{l:'Trades today',v:7}].map(stat=>(
-            <div key={stat.l} style={{ background:'var(--bg3)', borderRadius:'var(--radius)', padding:'12px 14px' }}>
-              <div style={{ fontSize:10, color:'var(--text3)', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.8px', marginBottom:6 }}>{stat.l}</div>
-              <div style={{ fontSize:22, fontWeight:700 }}>{stat.v}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Copying list */}
-      <div style={card}>
-        <div style={{ fontSize:13, fontWeight:600, marginBottom:14 }}>Traders being copied</div>
-        {copying.map((name,i)=>(
-          <div key={i} style={{ display:'flex', alignItems:'center', gap:12, padding:'10px 0', borderTop:i>0?'1px solid var(--border)':'none' }}>
-            <div style={{ width:36, height:36, borderRadius:'50%', background:'var(--green-bg)', color:'var(--green)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:12, fontWeight:700 }}>
-              {name.slice(0,2).toUpperCase()}
-            </div>
-            <div style={{ flex:1 }}>
-              <div style={{ fontWeight:600 }}>{name}</div>
-              <div style={{ fontSize:11, color:'var(--text3)' }}>Auto-copying all trades</div>
-            </div>
-            <div style={{ display:'flex', alignItems:'center', gap:6, fontSize:11, color:'var(--green)' }}>
-              <div style={{ width:6, height:6, borderRadius:'50%', background:'var(--green)', animation:'pulse 2s infinite' }}/>
-              Active
-            </div>
-            <button style={{ padding:'5px 12px', borderRadius:20, background:'var(--red-bg)', color:'var(--red)', border:'1px solid var(--red-dim)', fontSize:12, fontWeight:600, cursor:'pointer' }}>Stop</button>
+        {traders.length === 0 ? (
+          <div style={{color:'var(--text-muted)',fontSize:13}}>
+            No traders being copied. Go to <strong>Top Traders</strong> and click "Copy trader" to start.
           </div>
-        ))}
+        ) : (
+          traders.map((t,i)=>(
+            <div key={t.id} style={{display:'flex',alignItems:'center',gap:12,padding:'10px 0',borderBottom:i<traders.length-1?'1px solid var(--border)':'none'}}>
+              <div style={{width:36,height:36,borderRadius:'50%',background:t.color||'var(--green-bg)',color:t.textColor||'var(--green)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700}}>
+                {(t.name||t.id).slice(0,2).toUpperCase()}
+              </div>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:600,fontSize:13}}>{t.name}</div>
+                <div style={{fontSize:11,color:'var(--text-muted)',marginTop:1}}>{t.source} · {t.tradeCount||0} trades copied · added {new Date(t.addedAt).toLocaleDateString()}</div>
+              </div>
+              <button onClick={()=>stopCopying(t.id)} style={{fontSize:11,padding:'5px 12px',borderRadius:20,background:'var(--red-bg)',color:'var(--red)',border:'1px solid #7f1d1d',cursor:'pointer',fontWeight:600}}>
+                Stop
+              </button>
+            </div>
+          ))
+        )}
       </div>
 
-      {/* Copy mode */}
-      <div style={card}>
-        <STitle t="Copy mode" d="How trade size is calculated relative to the original trader." />
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10 }}>
-          {[
-            {v:'proportional',l:'Proportional',d:'10% of their trade size'},
-            {v:'fixed',       l:'Fixed amount', d:'Fixed USD per trade'},
-            {v:'fixedLot',    l:'Fixed lot',    d:'Exact same quantity'},
-          ].map(m=>(
-            <button key={m.v} onClick={()=>up('mode',m.v)} style={{
-              background:s.mode===m.v?'var(--green-bg)':'var(--bg3)', textAlign:'left',
-              border:`1.5px solid ${s.mode===m.v?'var(--green-dim)':'var(--border)'}`,
-              borderRadius:'var(--radius)', padding:'12px 14px', cursor:'pointer',
-            }}>
-              <div style={{ fontWeight:700, fontSize:13, color:s.mode===m.v?'var(--green)':'var(--text1)', marginBottom:4 }}>{m.l}</div>
-              <div style={{ fontSize:11, color:'var(--text3)' }}>{m.d}</div>
-            </button>
+      {/* Open positions */}
+      {positions.length > 0 && (
+        <div style={{background:'var(--bg-card)',borderRadius:'var(--radius-lg)',padding:'1.25rem',border:'1px solid var(--border)'}}>
+          <div style={{fontWeight:600,fontSize:14,marginBottom:14}}>Open Positions</div>
+          {positions.map((p,i)=>(
+            <div key={i} style={{display:'flex',alignItems:'center',gap:10,padding:'9px 0',borderBottom:i<positions.length-1?'1px solid var(--border)':'none',fontSize:13}}>
+              <span style={{fontWeight:700,flex:1}}>{p.symbol}</span>
+              <span style={{fontSize:10,padding:'2px 8px',borderRadius:4,fontWeight:600,background:p.side==='long'?'var(--green-bg)':'var(--red-bg)',color:p.side==='long'?'var(--green)':'var(--red)'}}>{p.side.toUpperCase()}</span>
+              <span style={{color:'var(--text-secondary)'}}>${p.entryPrice?.toLocaleString()}</span>
+              <span style={{fontWeight:700,color:p.pnl>=0?'var(--green)':'var(--red)'}}>{p.pnl>=0?'+':''}{p.pnl?.toFixed(2)}%</span>
+              <span style={{fontSize:11,color:'var(--text-muted)'}}>${p.sizeUsd}</span>
+            </div>
           ))}
         </div>
-      </div>
+      )}
 
-      {/* Risk */}
-      <div style={card}>
-        <STitle t="Risk controls" d="Automatic safeguards applied to all copied trades." />
-        <div style={{ display:'flex', flexDirection:'column', gap:18 }}>
-          <Row l="Max trade size" d="Maximum USD value per copied trade">
-            <select value={s.maxSize} onChange={e=>up('maxSize',parseInt(e.target.value))} style={sel}>
-              {[100,250,500,1000,2500,5000].map(v=><option key={v} value={v}>${v.toLocaleString()}</option>)}
+      {/* Bot settings */}
+      <div style={{background:'var(--bg-card)',borderRadius:'var(--radius-lg)',padding:'1.25rem',border:'1px solid var(--border)'}}>
+        <div style={{fontWeight:600,fontSize:14,marginBottom:14}}>Bot Settings</div>
+        <div style={{display:'flex',flexDirection:'column',gap:16}}>
+          <Row label="Trade size (USD)" desc="How much to spend per copied trade">
+            <div style={{display:'flex',alignItems:'center',gap:8}}>
+              <input type="number" value={settings.maxTradeUsd} onChange={e=>setSettings(p=>({...p,maxTradeUsd:parseInt(e.target.value)}))} min={10} max={10000} style={{...inp,width:90,textAlign:'right'}}/>
+              <span style={{fontSize:12,color:'var(--text-muted)'}}>USD</span>
+            </div>
+          </Row>
+          <Row label="Copy mode" desc="How position size is calculated">
+            <select value={settings.copyMode} onChange={e=>setSettings(p=>({...p,copyMode:e.target.value}))} style={sel}>
+              <option value="proportional">Proportional</option>
+              <option value="fixed">Fixed amount</option>
             </select>
           </Row>
-          <Row l="Auto stop-loss" d="Close trade if it drops this % from entry">
-            <Toggle on={s.sl>0} toggle={()=>up('sl',s.sl>0?0:0.02)}/>
-            {s.sl>0 && <select value={s.sl} onChange={e=>up('sl',parseFloat(e.target.value))} style={{...sel,marginLeft:10}}>
-              {[0.01,0.02,0.03,0.05,0.1].map(v=><option key={v} value={v}>{(v*100).toFixed(0)}% SL</option>)}
-            </select>}
+          <Row label="Auto stop-loss" desc="Close if position drops below this %">
+            <div style={{display:'flex',alignItems:'center',gap:8}}>
+              <Toggle on={settings.autoStopLoss>0} onToggle={()=>setSettings(p=>({...p,autoStopLoss:p.autoStopLoss>0?0:2}))}/>
+              {settings.autoStopLoss>0 && <>
+                <input type="number" value={settings.autoStopLoss} onChange={e=>setSettings(p=>({...p,autoStopLoss:parseFloat(e.target.value)}))} min={0.5} max={20} step={0.5} style={{...inp,width:70,textAlign:'right'}}/>
+                <span style={{fontSize:12,color:'var(--text-muted)'}}>%</span>
+              </>}
+            </div>
           </Row>
-          <Row l="Copy position closes" d="Close your trade when the copied trader exits">
-            <Toggle on={s.copyClose} toggle={()=>up('copyClose',!s.copyClose)}/>
+          <Row label="Copy closes" desc="Close position when trader closes theirs">
+            <Toggle on={settings.copyCloses} onToggle={()=>setSettings(p=>({...p,copyCloses:!p.copyCloses}))}/>
           </Row>
-          <Row l="Pause on drawdown" d="Suspend copying if total portfolio drops this %">
-            <Toggle on={s.drawdown>0} toggle={()=>up('drawdown',s.drawdown>0?0:0.05)}/>
-            {s.drawdown>0 && <select value={s.drawdown} onChange={e=>up('drawdown',parseFloat(e.target.value))} style={{...sel,marginLeft:10}}>
-              {[0.03,0.05,0.1,0.2].map(v=><option key={v} value={v}>{(v*100).toFixed(0)}% limit</option>)}
-            </select>}
-          </Row>
+        </div>
+        <div style={{display:'flex',justifyContent:'flex-end',marginTop:16,gap:10,alignItems:'center'}}>
+          {saved && <span style={{fontSize:13,color:'var(--green)'}}>{saved}</span>}
+          <button onClick={save} style={{background:'var(--green)',color:'#000',border:'none',padding:'9px 24px',borderRadius:'var(--radius-md)',fontSize:13,fontWeight:700,cursor:'pointer'}}>Save settings</button>
         </div>
       </div>
 
-      {/* Asset filter */}
-      <div style={card}>
-        <STitle t="Asset filter" d="Limit which asset classes the bot copies." />
-        <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
-          {[['all','All assets'],['crypto','Crypto only'],['spot','Spot only'],['futures','Futures only']].map(([v,l])=>(
-            <button key={v} onClick={()=>up('filter',v)} style={{
-              padding:'7px 14px', borderRadius:20, border:'1.5px solid', cursor:'pointer', fontSize:13, fontWeight:500,
-              background:s.filter===v?'var(--green-bg)':'transparent',
-              color:s.filter===v?'var(--green)':'var(--text2)',
-              borderColor:s.filter===v?'var(--green-dim)':'var(--border2)',
-            }}>{l}</button>
-          ))}
+      {/* Manual trade */}
+      <div style={{background:'var(--bg-card)',borderRadius:'var(--radius-lg)',padding:'1.25rem',border:'1px solid var(--border)'}}>
+        <div style={{fontWeight:600,fontSize:14,marginBottom:6}}>Manual Trade</div>
+        <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:14}}>Execute a trade directly on your connected exchange.</div>
+        <div style={{display:'grid',gridTemplateColumns:'2fr 1fr 2fr 1fr',gap:8,alignItems:'end'}}>
+          <div>
+            <label style={{fontSize:11,color:'var(--text-muted)',display:'block',marginBottom:5}}>Pair</label>
+            <select value={manualTrade.symbol} onChange={e=>setMT(p=>({...p,symbol:e.target.value}))} style={sel}>
+              {PAIRS.map(p=><option key={p} value={p}>{p}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{fontSize:11,color:'var(--text-muted)',display:'block',marginBottom:5}}>Side</label>
+            <select value={manualTrade.side} onChange={e=>setMT(p=>({...p,side:e.target.value}))} style={sel}>
+              <option value="long">Long (Buy)</option>
+              <option value="short">Short (Sell)</option>
+            </select>
+          </div>
+          <div>
+            <label style={{fontSize:11,color:'var(--text-muted)',display:'block',marginBottom:5}}>Price (USD)</label>
+            <input type="number" value={manualTrade.price} onChange={e=>setMT(p=>({...p,price:e.target.value}))} style={{...inp,width:'100%'}}/>
+          </div>
+          <button onClick={executeTrade} disabled={executing||!status?.hasKeys} style={{
+            background:executing?'var(--green-dim)':'var(--green)',color:'#000',border:'none',padding:'9px 16px',
+            borderRadius:'var(--radius-md)',fontSize:13,fontWeight:700,cursor:executing?'wait':'pointer',
+            opacity:!status?.hasKeys?0.4:1,
+          }}>
+            {executing?'…':'Execute'}
+          </button>
         </div>
-      </div>
-
-      <div style={{ display:'flex', justifyContent:'flex-end', alignItems:'center', gap:12 }}>
-        {saved && <span style={{ fontSize:13, color:'var(--green)', fontWeight:600 }}>✓ Settings saved</span>}
-        <button onClick={save} style={{ background:'var(--green)', color:'#000', border:'none', padding:'10px 28px', borderRadius:'var(--radius)', fontSize:14, fontWeight:700, cursor:'pointer' }}>
-          Save settings
-        </button>
+        {!status?.hasKeys && <div style={{fontSize:11,color:'var(--text-muted)',marginTop:8}}>Add API keys to enable trading</div>}
+        {tradeResult && (
+          <div style={{marginTop:12,padding:'10px 12px',borderRadius:'var(--radius-sm)',background:tradeResult.error?'var(--red-bg)':'var(--green-bg)',border:`1px solid ${tradeResult.error?'#7f1d1d':'var(--green-dim)'}`,fontSize:13,color:tradeResult.error?'var(--red)':'var(--green)'}}>
+            {tradeResult.error ? `❌ ${tradeResult.error}` : `✅ Order placed · ${manualTrade.symbol} ${manualTrade.side.toUpperCase()} · $${settings.maxTradeUsd}`}
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-const STitle = ({t,d}) => <div style={{marginBottom:14}}><div style={{fontWeight:700,fontSize:14,marginBottom:4}}>{t}</div><div style={{fontSize:12,color:'var(--text3)'}}>{d}</div></div>;
-const Row = ({l,d,children}) => <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}><div><div style={{fontWeight:600,fontSize:13}}>{l}</div><div style={{fontSize:11,color:'var(--text3)',marginTop:2}}>{d}</div></div><div style={{display:'flex',alignItems:'center'}}>{children}</div></div>;
-const Toggle = ({on,toggle}) => <div onClick={toggle} style={{width:40,height:22,borderRadius:11,background:on?'var(--green)':'var(--border2)',position:'relative',cursor:'pointer',transition:'background 0.2s',flexShrink:0}}><div style={{width:16,height:16,borderRadius:'50%',background:'white',position:'absolute',top:3,left:on?21:3,transition:'left 0.2s',boxShadow:'0 1px 3px rgba(0,0,0,0.3)'}}/></div>;
+function Row({label,desc,children}){return(<div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}><div><div style={{fontSize:13,fontWeight:600}}>{label}</div><div style={{fontSize:11,color:'var(--text-muted)',marginTop:1}}>{desc}</div></div><div style={{display:'flex',alignItems:'center',gap:8}}>{children}</div></div>);}
+function Toggle({on,onToggle}){return(<div onClick={onToggle} style={{width:38,height:21,borderRadius:11,background:on?'var(--green)':'var(--border)',position:'relative',cursor:'pointer',transition:'background 0.2s'}}><div style={{width:15,height:15,borderRadius:'50%',background:'white',position:'absolute',top:3,left:on?20:3,transition:'left 0.2s'}}/>  </div>);}
 
-const card = { background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'var(--radius-lg)', padding:'20px' };
-const sel  = { background:'var(--bg3)', border:'1px solid var(--border)', color:'var(--text1)', fontSize:13, padding:'6px 10px', borderRadius:'var(--radius)', outline:'none' };
+const inp={background:'var(--bg-hover)',border:'1px solid var(--border)',color:'var(--text-primary)',padding:'8px 10px',borderRadius:'var(--radius-sm)',fontSize:13};
+const sel={...inp,width:'100%'};

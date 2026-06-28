@@ -1,162 +1,171 @@
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, AreaChart, Area, XAxis, YAxis } from 'recharts';
+import { useEffect, useState } from 'react';
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis } from 'recharts';
+import { api } from '../lib/api.js';
 
-const PNL_DATA = [
-  {m:'Jul',v:3.1},{m:'Aug',v:-1.2},{m:'Sep',v:5.4},{m:'Oct',v:7.2},
-  {m:'Nov',v:-0.8},{m:'Dec',v:4.1},{m:'Jan',v:6.3},{m:'Feb',v:2.9},
-  {m:'Mar',v:8.1},{m:'Apr',v:-1.5},{m:'May',v:5.7},{m:'Jun',v:9.2},
-];
+const COLORS = ['#22c55e','#3b82f6','#a855f7','#f59e0b','#ef4444','#06b6d4','#84cc16','#f97316'];
 
-const PALETTE = ['#22c55e','#3b82f6','#a855f7','#f97316','#ef4444','#22d3ee','#eab308','#86efac'];
+export default function Portfolio() {
+  const [data, setData]     = useState(null);
+  const [loading, setLoad]  = useState(true);
+  const [error, setError]   = useState(null);
 
-export default function Portfolio({ prices }) {
-  const btc = prices?.bitcoin?.usd     || 63450;
-  const eth = prices?.ethereum?.usd    || 1672;
-  const sol = prices?.solana?.usd      || 70.1;
-  const bnb = prices?.binancecoin?.usd || 582;
+  useEffect(() => {
+    api.getPortfolio()
+      .then(d => { setData(d); setLoad(false); })
+      .catch(e => { setError(e.message); setLoad(false); });
+  }, []);
 
-  const balances = [
-    { asset:'USDT', amount:10000,  price:1,   exchange:'Binance' },
-    { asset:'BTC',  amount:0.1,    price:btc, exchange:'Binance' },
-    { asset:'ETH',  amount:1.2,    price:eth, exchange:'Binance' },
-    { asset:'SOL',  amount:15,     price:sol, exchange:'Bybit'   },
-    { asset:'BNB',  amount:1.2,    price:bnb, exchange:'Binance' },
-  ].map(b => ({ ...b, value: b.amount * b.price })).sort((a,b) => b.value - a.value);
+  if (loading) return <div style={{ color:'var(--text-muted)', fontSize:13, padding:'2rem' }}>Fetching your balances…</div>;
+  if (error)   return <div style={{ color:'var(--red)', fontSize:13, padding:'2rem' }}>Error: {error}</div>;
 
-  const total = balances.reduce((s,b) => s + b.value, 0);
-  const pieData = balances.map(b => ({ name:b.asset, value: parseFloat(b.value.toFixed(2)) }));
-
-  const positions = [
-    { sym:'BTC/USDT', side:'long',  entry:62100, current:63450, pnlPct:2.17,  pnlUsd:+134.9, trader:'CryptoWolf_X',  opened:'2h ago' },
-    { sym:'ETH/USDT', side:'long',  entry:1640,  current:1672,  pnlPct:1.95,  pnlUsd:+38.4,  trader:'AlphaStocks',   opened:'5h ago' },
-    { sym:'SOL/USDT', side:'short', entry:71.2,  current:70.1,  pnlPct:1.54,  pnlUsd:+24.8,  trader:'BullRunKing',   opened:'30m ago'},
-  ];
+  const { totalUsd, balances, pnlByMonth, demo, errors, openPositions=[], tradeLog=[] } = data;
+  const realBals = balances.filter(b => !b.empty && b.total > 0);
+  const pieData  = realBals.map(b => ({ name: b.asset, value: parseFloat(b.usdValue.toFixed(2)) }));
 
   return (
-    <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
-      {/* Summary */}
+    <div className="fade-in" style={{ display:'flex', flexDirection:'column', gap:'1.25rem' }}>
+      {/* Errors / warnings */}
+      {errors?.length > 0 && (
+        <div style={{ background:'var(--red-bg)', border:'1px solid #7f1d1d', borderRadius:'var(--radius-md)', padding:'12px 16px' }}>
+          <div style={{ fontSize:12, fontWeight:600, color:'var(--red)', marginBottom:4 }}>⚠️ Connection issues</div>
+          {errors.map((e,i) => <div key={i} style={{ fontSize:12, color:'#fca5a5', marginTop:2 }}>{e}</div>)}
+          {errors.some(e => e.includes('geo-blocked')) && (
+            <div style={{ fontSize:11, color:'#fca5a5', marginTop:8, paddingTop:8, borderTop:'1px solid #7f1d1d' }}>
+              Fix: Go to Binance → API Management → your key → disable IP restriction
+            </div>
+          )}
+        </div>
+      )}
+
+      {demo && (
+        <div style={{ background:'#1c1800', border:'1px solid #92400e', borderRadius:'var(--radius-md)', padding:'12px 16px', fontSize:13, color:'#fcd34d' }}>
+          ⚠️ Showing demo data — add your Binance/Bybit API keys in <strong>API Keys</strong> settings to see real balances
+        </div>
+      )}
+
+      {/* Stats row */}
       <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12 }}>
         {[
-          { l:'Total Value',    v:`$${total.toLocaleString('en',{maximumFractionDigits:0})}`,  c:'var(--green)' },
-          { l:'Month P&L',      v:'+9.2%',   c:'var(--green)' },
-          { l:'Open Positions', v:'3',        c:'var(--text1)' },
-          { l:'Unrealised P&L', v:'+$198.1', c:'var(--green)' },
+          { label:'Total Value',    val:`$${totalUsd.toLocaleString('en',{maximumFractionDigits:2})}`, color: demo?'var(--text-muted)':'var(--green)' },
+          { label:'Open Positions', val:openPositions.length, color:'var(--text-primary)' },
+          { label:'Trades Copied',  val:tradeLog.length,      color:'var(--text-primary)' },
+          { label:'Status',         val:demo?'Demo':'Live',   color:demo?'var(--gold)':'var(--green)' },
         ].map((s,i)=>(
-          <div key={i} style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'var(--radius-lg)', padding:'16px 20px' }}>
-            <div style={{ fontSize:10, color:'var(--text3)', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.8px', marginBottom:8 }}>{s.l}</div>
-            <div style={{ fontSize:24, fontWeight:700, letterSpacing:'-0.5px', color:s.c }}>{s.v}</div>
+          <div key={i} style={{ background:'var(--bg-card)', borderRadius:'var(--radius-lg)', padding:'1rem', border:'1px solid var(--border)' }}>
+            <div style={{ fontSize:11, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.5px', marginBottom:6 }}>{s.label}</div>
+            <div style={{ fontSize:22, fontWeight:700, color:s.color }}>{s.val}</div>
           </div>
         ))}
       </div>
 
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
-        {/* Allocation */}
-        <div style={card}>
-          <div style={ch}><span style={ct}>Allocation</span><span style={{ fontFamily:'var(--mono)', fontWeight:700, color:'var(--green)' }}>${total.toLocaleString('en',{maximumFractionDigits:0})}</span></div>
-          <div style={{ display:'flex', alignItems:'center', gap:20 }}>
-            <ResponsiveContainer width={130} height={130}>
-              <PieChart>
-                <Pie data={pieData} cx="50%" cy="50%" innerRadius={36} outerRadius={60} dataKey="value" strokeWidth={0}>
-                  {pieData.map((_,i)=><Cell key={i} fill={PALETTE[i]}/>)}
-                </Pie>
-                <Tooltip formatter={v=>[`$${parseFloat(v).toLocaleString('en',{maximumFractionDigits:0})}`]} contentStyle={{ background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:'var(--radius)', fontSize:12 }}/>
-              </PieChart>
-            </ResponsiveContainer>
-            <div style={{ flex:1 }}>
-              {balances.map((b,i)=>(
-                <div key={b.asset} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
-                  <div style={{ width:8, height:8, borderRadius:'50%', background:PALETTE[i], flexShrink:0 }}/>
-                  <span style={{ fontWeight:600, width:36, fontSize:13 }}>{b.asset}</span>
-                  <span style={{ fontFamily:'var(--mono)', fontSize:12, color:'var(--text2)', flex:1 }}>${b.value.toLocaleString('en',{maximumFractionDigits:0})}</span>
-                  <span style={{ fontSize:11, color:'var(--text3)', width:34, textAlign:'right' }}>{((b.value/total)*100).toFixed(1)}%</span>
-                </div>
-              ))}
-            </div>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'1.25rem' }}>
+        {/* Balances */}
+        <div style={{ background:'var(--bg-card)', borderRadius:'var(--radius-lg)', padding:'1.25rem', border:'1px solid var(--border)' }}>
+          <div style={{ fontWeight:600, fontSize:14, marginBottom:14 }}>
+            Balances {!demo && <span style={{ fontSize:11, color:'var(--green)', fontWeight:500 }}>· Live</span>}
           </div>
+          {balances.length === 0 ? (
+            <div style={{ color:'var(--text-muted)', fontSize:13 }}>No balances found. Your accounts may be empty.</div>
+          ) : (
+            <table style={{ width:'100%', fontSize:13, borderCollapse:'collapse' }}>
+              <thead>
+                <tr style={{ fontSize:10, textTransform:'uppercase', color:'var(--text-muted)' }}>
+                  <td style={{paddingBottom:8}}>Asset</td><td>Exchange</td><td style={{textAlign:'right'}}>Balance</td><td style={{textAlign:'right'}}>Value</td>
+                </tr>
+              </thead>
+              <tbody>
+                {balances.map((b,i)=>(
+                  <tr key={i} style={{ borderTop:'1px solid var(--border)', opacity:b.empty?0.4:1 }}>
+                    <td style={{ padding:'9px 0', fontWeight:600, display:'flex', alignItems:'center', gap:8 }}>
+                      <div style={{ width:6, height:6, borderRadius:'50%', background:COLORS[i%COLORS.length] }}/>
+                      {b.asset}
+                    </td>
+                    <td style={{ fontSize:11, color:'var(--text-muted)' }}>{b.exchange}</td>
+                    <td style={{ textAlign:'right', color:'var(--text-secondary)' }}>{b.empty ? '0.00' : b.total.toFixed(6)}</td>
+                    <td style={{ textAlign:'right', fontWeight:600 }}>${b.usdValue < 0.01 ? '0.00' : b.usdValue.toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
 
-        {/* P&L */}
-        <div style={card}>
-          <div style={ch}><span style={ct}>Monthly P&L</span><span style={{ fontSize:13, color:'var(--green)', fontWeight:600 }}>+47.8% YTD</span></div>
-          <ResponsiveContainer width="100%" height={140}>
-            <AreaChart data={PNL_DATA} margin={{top:0,right:0,left:-20,bottom:0}}>
-              <defs>
-                <linearGradient id="pnlG" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="var(--green)" stopOpacity={0.3}/>
-                  <stop offset="100%" stopColor="var(--green)" stopOpacity={0}/>
-                </linearGradient>
-              </defs>
-              <XAxis dataKey="m" tick={{fontSize:10,fill:'var(--text3)'}} axisLine={false} tickLine={false}/>
-              <YAxis tick={{fontSize:10,fill:'var(--text3)'}} axisLine={false} tickLine={false} tickFormatter={v=>`${v}%`}/>
-              <Tooltip formatter={v=>[`${v}%`,'P&L']} contentStyle={{ background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:'var(--radius)', fontSize:12 }}/>
-              <Area type="monotone" dataKey="v" stroke="var(--green)" strokeWidth={2} fill="url(#pnlG)"/>
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      {/* Balances */}
-      <div style={card}>
-        <div style={ch}><span style={ct}>Balances</span><span style={{ fontSize:12, color:'var(--text3)' }}>Prices updating live</span></div>
-        <table style={{ width:'100%', borderCollapse:'collapse' }}>
-          <thead>
-            <tr style={{ fontSize:10, textTransform:'uppercase', letterSpacing:'0.8px', color:'var(--text3)', fontWeight:600 }}>
-              <td style={{paddingBottom:10}}>Asset</td><td>Exchange</td><td style={{textAlign:'right'}}>Balance</td><td style={{textAlign:'right'}}>Price</td><td style={{textAlign:'right'}}>Value</td><td style={{textAlign:'right'}}>Allocation</td>
-            </tr>
-          </thead>
-          <tbody>
-            {balances.map((b,i)=>(
-              <tr key={b.asset} style={{ borderTop:'1px solid var(--border)' }}>
-                <td style={{ padding:'11px 0', display:'flex', alignItems:'center', gap:10 }}>
-                  <div style={{ width:8, height:8, borderRadius:'50%', background:PALETTE[i] }}/>
-                  <span style={{ fontWeight:700 }}>{b.asset}</span>
-                </td>
-                <td style={{ fontSize:11, color:'var(--text3)' }}>{b.exchange}</td>
-                <td style={{ textAlign:'right', fontFamily:'var(--mono)', fontSize:13, color:'var(--text2)' }}>{b.amount.toFixed(b.asset==='USDT'?2:4)}</td>
-                <td style={{ textAlign:'right', fontFamily:'var(--mono)', fontSize:13, color:'var(--text2)' }}>{b.asset==='USDT'?'$1.00':`$${b.price.toLocaleString('en',{maximumFractionDigits:2})}`}</td>
-                <td style={{ textAlign:'right', fontFamily:'var(--mono)', fontWeight:600 }}>${b.value.toLocaleString('en',{maximumFractionDigits:2})}</td>
-                <td style={{ textAlign:'right' }}>
-                  <div style={{ display:'flex', alignItems:'center', gap:6, justifyContent:'flex-end' }}>
-                    <div style={{ width:48, height:4, borderRadius:2, background:'var(--border)' }}>
-                      <div style={{ width:`${(b.value/total)*100}%`, height:'100%', borderRadius:2, background:PALETTE[i] }}/>
-                    </div>
-                    <span style={{ fontSize:11, color:'var(--text3)', width:32, textAlign:'right' }}>{((b.value/total)*100).toFixed(1)}%</span>
+        {/* Allocation pie */}
+        <div style={{ background:'var(--bg-card)', borderRadius:'var(--radius-lg)', padding:'1.25rem', border:'1px solid var(--border)' }}>
+          <div style={{ fontWeight:600, fontSize:14, marginBottom:14 }}>Allocation</div>
+          {pieData.length === 0 ? (
+            <div style={{ color:'var(--text-muted)', fontSize:13 }}>No assets to display</div>
+          ) : (
+            <div style={{ display:'flex', alignItems:'center', gap:16 }}>
+              <ResponsiveContainer width={130} height={130}>
+                <PieChart>
+                  <Pie data={pieData} cx="50%" cy="50%" innerRadius={35} outerRadius={62} dataKey="value" strokeWidth={0}>
+                    {pieData.map((_,i)=><Cell key={i} fill={COLORS[i%COLORS.length]}/>)}
+                  </Pie>
+                  <Tooltip formatter={v=>[`$${parseFloat(v).toFixed(2)}`]} contentStyle={{background:'var(--bg-card)',border:'1px solid var(--border)',fontSize:12}}/>
+                </PieChart>
+              </ResponsiveContainer>
+              <div style={{ flex:1 }}>
+                {pieData.map((d,i)=>(
+                  <div key={d.name} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
+                    <div style={{ width:8, height:8, borderRadius:'50%', background:COLORS[i%COLORS.length] }}/>
+                    <span style={{ fontSize:13, flex:1, fontWeight:500 }}>{d.name}</span>
+                    <span style={{ fontSize:12, color:'var(--text-secondary)' }}>${d.value.toFixed(2)}</span>
                   </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Open positions */}
-      <div style={card}>
-        <div style={ch}><span style={ct}>Open positions</span><span style={{ fontSize:12, color:'var(--green)', fontWeight:600 }}>All profitable</span></div>
-        <table style={{ width:'100%', borderCollapse:'collapse' }}>
-          <thead>
-            <tr style={{ fontSize:10, textTransform:'uppercase', letterSpacing:'0.8px', color:'var(--text3)', fontWeight:600 }}>
-              <td style={{paddingBottom:10}}>Pair</td><td>Side</td><td>Trader</td><td>Opened</td><td style={{textAlign:'right'}}>Entry</td><td style={{textAlign:'right'}}>Current</td><td style={{textAlign:'right'}}>P&L %</td><td style={{textAlign:'right'}}>P&L $</td>
-            </tr>
-          </thead>
-          <tbody>
-            {positions.map((p,i)=>(
-              <tr key={i} style={{ borderTop:'1px solid var(--border)' }}>
-                <td style={{ padding:'11px 0', fontWeight:700, fontFamily:'var(--mono)', fontSize:13 }}>{p.sym}</td>
-                <td><span style={{ fontSize:10, padding:'2px 8px', borderRadius:4, fontWeight:700, background:p.side==='long'?'var(--green-bg)':'var(--red-bg)', color:p.side==='long'?'var(--green)':'var(--red)', textTransform:'uppercase' }}>{p.side}</span></td>
-                <td style={{ fontSize:12, color:'var(--text3)' }}>{p.trader}</td>
-                <td style={{ fontSize:11, color:'var(--text3)' }}>{p.opened}</td>
-                <td style={{ textAlign:'right', fontFamily:'var(--mono)', fontSize:12, color:'var(--text2)' }}>${p.entry.toLocaleString()}</td>
-                <td style={{ textAlign:'right', fontFamily:'var(--mono)', fontSize:12, color:'var(--text2)' }}>${p.current.toLocaleString()}</td>
-                <td style={{ textAlign:'right', fontFamily:'var(--mono)', fontWeight:700, color:'var(--green)' }}>+{p.pnlPct}%</td>
-                <td style={{ textAlign:'right', fontFamily:'var(--mono)', fontWeight:700, color:'var(--green)' }}>+${p.pnlUsd}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      {/* Open Positions */}
+      {openPositions.length > 0 && (
+        <div style={{ background:'var(--bg-card)', borderRadius:'var(--radius-lg)', padding:'1.25rem', border:'1px solid var(--border)' }}>
+          <div style={{ fontWeight:600, fontSize:14, marginBottom:14 }}>Open Positions</div>
+          <table style={{ width:'100%', fontSize:13, borderCollapse:'collapse' }}>
+            <thead><tr style={{ fontSize:10, textTransform:'uppercase', color:'var(--text-muted)' }}>
+              <td style={{paddingBottom:8}}>Pair</td><td>Side</td><td>Trader</td><td style={{textAlign:'right'}}>Entry</td><td style={{textAlign:'right'}}>Size</td><td style={{textAlign:'right'}}>P&L</td>
+            </tr></thead>
+            <tbody>
+              {openPositions.map((p,i)=>(
+                <tr key={i} style={{ borderTop:'1px solid var(--border)' }}>
+                  <td style={{padding:'9px 0',fontWeight:700}}>{p.symbol}</td>
+                  <td><span style={{fontSize:10,padding:'2px 8px',borderRadius:4,fontWeight:600,background:p.side==='long'?'var(--green-bg)':'var(--red-bg)',color:p.side==='long'?'var(--green)':'var(--red)'}}>{p.side.toUpperCase()}</span></td>
+                  <td style={{color:'var(--text-muted)',fontSize:12}}>{p.traderName}</td>
+                  <td style={{textAlign:'right',color:'var(--text-secondary)'}}>${p.entryPrice?.toLocaleString()}</td>
+                  <td style={{textAlign:'right',color:'var(--text-secondary)'}}>${p.sizeUsd}</td>
+                  <td style={{textAlign:'right',fontWeight:700,color:p.pnl>=0?'var(--green)':'var(--red)'}}>{p.pnl>=0?'+':''}{p.pnl?.toFixed(2)}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Trade log */}
+      {tradeLog.length > 0 && (
+        <div style={{ background:'var(--bg-card)', borderRadius:'var(--radius-lg)', padding:'1.25rem', border:'1px solid var(--border)' }}>
+          <div style={{ fontWeight:600, fontSize:14, marginBottom:14 }}>Trade History</div>
+          <table style={{ width:'100%', fontSize:13, borderCollapse:'collapse' }}>
+            <thead><tr style={{ fontSize:10, textTransform:'uppercase', color:'var(--text-muted)' }}>
+              <td style={{paddingBottom:8}}>Time</td><td>Pair</td><td>Side</td><td>Trader</td><td style={{textAlign:'right'}}>P&L</td><td style={{textAlign:'right'}}>Status</td>
+            </tr></thead>
+            <tbody>
+              {tradeLog.slice(0,20).map((t,i)=>(
+                <tr key={i} style={{ borderTop:'1px solid var(--border)' }}>
+                  <td style={{padding:'8px 0',fontSize:11,color:'var(--text-muted)'}}>{new Date(t.openedAt).toLocaleTimeString()}</td>
+                  <td style={{fontWeight:600}}>{t.symbol}</td>
+                  <td><span style={{fontSize:10,padding:'2px 6px',borderRadius:4,background:t.side==='long'?'var(--green-bg)':'var(--red-bg)',color:t.side==='long'?'var(--green)':'var(--red)',fontWeight:600}}>{t.side}</span></td>
+                  <td style={{color:'var(--text-muted)',fontSize:12}}>{t.traderName}</td>
+                  <td style={{textAlign:'right',color:(t.pnl||0)>=0?'var(--green)':'var(--red)',fontWeight:600}}>{t.pnl?(t.pnl>=0?'+':'')+t.pnl.toFixed(2)+'%':'—'}</td>
+                  <td style={{textAlign:'right'}}><span style={{fontSize:10,padding:'2px 7px',borderRadius:4,background:t.status==='open'?'var(--green-bg)':t.status==='closed'?'var(--blue-bg)':'var(--red-bg)',color:t.status==='open'?'var(--green)':t.status==='closed'?'var(--blue)':'var(--red)',fontWeight:600}}>{t.status}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
-
-const card = { background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'var(--radius-lg)', padding:'20px' };
-const ch = { display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:14 };
-const ct = { fontSize:13, fontWeight:600 };
